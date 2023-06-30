@@ -90,6 +90,82 @@ func TestReconcile_Reconcile(t *testing.T) {
 	assert.Equal(t, "unable to create component: create fatal", loggerSink.LastError().Error())
 }
 
+func TestReconcile_ReconcileSubComponent(t *testing.T) {
+	logger := mock.NewLogr()
+	sch := runtime.NewScheme()
+	utilruntime.Must(keycloakApi.AddToScheme(sch))
+	utilruntime.Must(corev1.AddToScheme(sch))
+
+	var (
+		hlp       helper.Mock
+		kcAdapter adapter.Mock
+		comp      = keycloakApi.KeycloakRealmComponent{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-comp-name", Namespace: "ns"},
+			TypeMeta:   metav1.TypeMeta{Kind: "KeycloakRealmComponent", APIVersion: "v1.edp.epam.com/v1"},
+			Spec:       keycloakApi.KeycloakComponentSpec{Name: "test-comp", Parent: "test-parent-comp-name"},
+			Status:     keycloakApi.KeycloakComponentStatus{Value: helper.StatusOK},
+		}
+		parentcomp = keycloakApi.KeycloakRealmComponent{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-parent-comp-name", Namespace: "ns"},
+			TypeMeta:   metav1.TypeMeta{Kind: "KeycloakRealmComponent", APIVersion: "v1.edp.epam.com/v1"},
+			Spec:       keycloakApi.KeycloakComponentSpec{Name: "test-parent-comp"},
+			Status:     keycloakApi.KeycloakComponentStatus{Value: helper.StatusOK},
+		}
+		realm = keycloakApi.KeycloakRealm{TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1.edp.epam.com/v1", Kind: "KeycloakRealm",
+		},
+			ObjectMeta: metav1.ObjectMeta{Name: "realm1", Namespace: "ns",
+				OwnerReferences: []metav1.OwnerReference{{Name: "keycloak1", Kind: "Keycloak"}}},
+			Spec: keycloakApi.KeycloakRealmSpec{RealmName: "ns.realm1"}}
+		testParentComp = adapter.Component{ID: "some-component-id", Name: parentcomp.Spec.Name}
+		testComp       = adapter.Component{ID: "component-id1", Name: comp.Spec.Name, ParentID: testParentComp.ID}
+	)
+
+	client := fake.NewClientBuilder().WithScheme(sch).WithRuntimeObjects(&comp).Build()
+	hlp.On("GetOrCreateRealmOwnerRef", &comp, &comp.ObjectMeta).Return(&realm, nil)
+	hlp.On("CreateKeycloakClientForRealm", &realm).Return(&kcAdapter, nil)
+	hlp.On("GetParentComponent", &comp).Return(&parentcomp, nil)
+	kcAdapter.On("GetComponent", realm.Spec.RealmName, parentcomp.Spec.Name).Return(&testParentComp, nil)
+	kcAdapter.On("GetComponent", realm.Spec.RealmName, comp.Spec.Name).Return(&testComp, nil).Once()
+	kcAdapter.On("UpdateComponent", realm.Spec.RealmName, &testComp).Return(nil)
+	hlp.On("TryToDelete", &comp, makeTerminator(realm.Spec.RealmName, comp.Spec.Name, &kcAdapter, logger),
+		finalizerName).Return(false, nil)
+	hlp.On("UpdateStatus", &comp).Return(nil)
+	r := NewReconcile(client, logger, &hlp)
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{
+		Name:      comp.Name,
+		Namespace: comp.Namespace,
+	}})
+	require.NoError(t, err)
+
+	loggerSink, ok := logger.GetSink().(*mock.Logger)
+	require.True(t, ok, "wrong logger type")
+	require.NoError(t, loggerSink.LastError())
+
+	if res.RequeueAfter != r.successReconcileTimeout {
+		t.Fatalf("wrong RequeueAfter: %d", res.RequeueAfter)
+	}
+
+	kcAdapter.On("GetComponent", realm.Spec.RealmName, comp.Spec.Name).Return(nil,
+		adapter.NotFoundError("not found")).Once()
+	kcAdapter.On("CreateComponent", realm.Spec.RealmName,
+		createKeycloakSubComponentFromSpec(&comp.Spec, testParentComp.ID)).Return(errors.New("create fatal"))
+
+	failureComp := comp.DeepCopy()
+	failureComp.Status.Value = "unable to create component: create fatal"
+	hlp.On("SetFailureCount", failureComp).Return(time.Minute)
+	hlp.On("UpdateStatus", failureComp).Return(nil)
+
+	_, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{
+		Name:      comp.Name,
+		Namespace: comp.Namespace,
+	}})
+	require.NoError(t, err)
+	require.Error(t, loggerSink.LastError())
+	assert.Equal(t, "unable to create component: create fatal", loggerSink.LastError().Error())
+}
+
 func TestIsSpecUpdated(t *testing.T) {
 	comp := keycloakApi.KeycloakRealmComponent{}
 

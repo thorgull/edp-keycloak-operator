@@ -349,3 +349,30 @@ func (h *Helper) TryToDelete(ctx context.Context, obj Deletable, terminator Term
 func CreatePathToTemplateDirectory(directory string) string {
 	return fmt.Sprintf("%s/%s", localConfigsRelativePath, directory)
 }
+
+type ComponentChild interface {
+	K8SParentComponentName() (string, error)
+	v1.Object
+}
+
+func (h *Helper) GetParentComponent(object ComponentChild) (*keycloakApi.KeycloakRealmComponent, error) {
+	parentComponentName, err := object.K8SParentComponentName()
+	if err != nil {
+		return nil, err
+	}
+	if parentComponentName != "" {
+		var component keycloakApi.KeycloakRealmComponent
+		if err := h.client.Get(context.TODO(), types.NamespacedName{
+			Name:      parentComponentName,
+			Namespace: object.GetNamespace(),
+		}, &component); err != nil {
+			return nil, errors.Wrapf(err, "unable to get RealmComponent with name %s", parentComponentName)
+		}
+		err = controllerutil.SetControllerReference(&component, object, h.scheme)
+		if err != nil {
+			return nil, fmt.Errorf("failed to set controller reference for realm %s: %w", parentComponentName, err)
+		}
+		return &component, nil
+	}
+	return nil, nil
+}

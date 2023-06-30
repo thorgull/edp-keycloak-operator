@@ -16,6 +16,8 @@ type KeycloakComponentSpec struct {
 	// ProviderType is a provider type of component.
 	ProviderType string `json:"providerType"`
 
+	Parent string `json:"parent,omitempty"`
+
 	// Config is a map of component configuration.
 	// +nullable
 	// +optional
@@ -62,6 +64,10 @@ func (in *KeycloakRealmComponent) SetStatus(value string) {
 
 func (in *KeycloakRealmComponent) K8SParentRealmName() (string, error) {
 	return in.Spec.Realm, nil
+}
+
+func (in *KeycloakRealmComponent) K8SParentComponentName() (string, error) {
+	return in.Spec.Parent, nil
 }
 
 // +kubebuilder:object:root=true

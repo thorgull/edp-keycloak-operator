@@ -31,6 +31,7 @@ type Helper interface {
 	GetOrCreateRealmOwnerRef(object helper.RealmChild, objectMeta *v1.ObjectMeta) (*keycloakApi.KeycloakRealm, error)
 	CreateKeycloakClientForRealm(ctx context.Context, realm *keycloakApi.KeycloakRealm) (keycloak.Client, error)
 	TryToDelete(ctx context.Context, obj helper.Deletable, terminator helper.Terminator, finalizer string) (isDeleted bool, resultErr error)
+	GetParentComponent(object helper.ComponentChild) (*keycloakApi.KeycloakRealmComponent, error)
 }
 
 type Reconcile struct {
@@ -128,7 +129,20 @@ func (r *Reconcile) tryReconcile(ctx context.Context, keycloakRealmComponent *ke
 		return errors.Wrap(err, "unable to create keycloak client")
 	}
 
-	keycloakComponent := createKeycloakComponentFromSpec(&keycloakRealmComponent.Spec)
+	var keycloakComponent *adapter.Component
+	if keycloakRealmComponent.Spec.Parent != "" {
+		parentKeycloakRealmComponent, err := r.helper.GetParentComponent(keycloakRealmComponent)
+		if err != nil {
+			return errors.Wrapf(err, "unable to find parent KeycloakRealmComponent %s", keycloakRealmComponent.Spec.Parent)
+		}
+		parentComponent, err := kClient.GetComponent(ctx, realm.Spec.RealmName, parentKeycloakRealmComponent.Spec.Name)
+		if err != nil {
+			return errors.Wrapf(err, "unable to find parent component %s", keycloakRealmComponent.Spec.Parent)
+		}
+		keycloakComponent = createKeycloakSubComponentFromSpec(&keycloakRealmComponent.Spec, parentComponent.ID)
+	} else {
+		keycloakComponent = createKeycloakComponentFromSpec(&keycloakRealmComponent.Spec)
+	}
 
 	cmp, err := kClient.GetComponent(ctx, realm.Spec.RealmName, keycloakRealmComponent.Spec.Name)
 	if err != nil && !adapter.IsErrNotFound(err) {
@@ -153,6 +167,16 @@ func (r *Reconcile) tryReconcile(ctx context.Context, keycloakRealmComponent *ke
 	}
 
 	return nil
+}
+
+func createKeycloakSubComponentFromSpec(spec *keycloakApi.KeycloakComponentSpec, parentId string) *adapter.Component {
+	return &adapter.Component{
+		Name:         spec.Name,
+		Config:       spec.Config,
+		ProviderID:   spec.ProviderID,
+		ProviderType: spec.ProviderType,
+		ParentID:     parentId,
+	}
 }
 
 func createKeycloakComponentFromSpec(spec *keycloakApi.KeycloakComponentSpec) *adapter.Component {

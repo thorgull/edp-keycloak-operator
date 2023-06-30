@@ -63,6 +63,14 @@ func (m *Mock) GetOrCreateRealmOwnerRef(object RealmChild, objectMeta *v1.Object
 	return called.Get(0).(*keycloakApi.KeycloakRealm), nil
 }
 
+func (m *Mock) GetParentComponent(object ComponentChild) (*keycloakApi.KeycloakRealmComponent, error) {
+	called := m.Called(object)
+	if err := called.Error(1); err != nil {
+		return nil, err
+	}
+	return called.Get(0).(*keycloakApi.KeycloakRealmComponent), nil
+}
+
 func (m *Mock) GetScheme() *runtime.Scheme {
 	return m.Called().Get(0).(*runtime.Scheme)
 }
